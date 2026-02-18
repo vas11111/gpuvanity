@@ -1,0 +1,5 @@
+click>=8.1.0
+pyopencl
+base58
+PyNaCl
+numpy
