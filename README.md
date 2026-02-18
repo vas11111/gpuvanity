@@ -9,7 +9,7 @@ GPU-accelerated Solana vanity address generator. Finds Ed25519 keypairs whose Ba
 apt install -y python3-full python3-venv ocl-icd-libopencl1
 apt install -y libnvidia-compute-570   # match your driver version
 
-git clone <repo-url> gpuvanity && cd gpuvanity
+git clone https://github.com/vas11111/gpuvanity.git && cd gpuvanity
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
