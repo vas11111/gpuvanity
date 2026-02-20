@@ -10,9 +10,9 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import click
-import pyopencl as cl
+import pycuda.driver as cuda
 
-from core.devices import discover_gpus, pick_devices
+from core.devices import discover_gpus, get_device_info, pick_devices
 from core.miner import _fmt_count, mine_loop
 from core.program import assert_base58, build_program_source
 from core.wallet import derive_address, export_keypair, identify_match
@@ -49,10 +49,11 @@ def _tune_process() -> None:
         pass
 
 
-def _detect_gpus(manual: bool) -> Tuple[int, Optional[Tuple[int, List[int]]]]:
+def _detect_gpus(manual: bool) -> Tuple[int, Optional[List[int]]]:
+    cuda.init()
     if manual:
         sel = pick_devices()
-        return len(sel[1]), sel
+        return len(sel), sel
     n = len(discover_gpus())
     if n == 0:
         logging.error("No GPUs detected")
@@ -83,13 +84,15 @@ def main(
     case_sensitive: bool,
     devices: bool,
 ):
-    """Solana vanity address miner -- GPU accelerated via OpenCL."""
+    """Solana vanity address miner -- GPU accelerated via CUDA."""
     if devices:
-        for pi, plat in enumerate(cl.get_platforms()):
-            click.echo(f"Platform {pi}: {plat.name}")
-            for di, d in enumerate(plat.get_devices(device_type=cl.device_type.GPU)):
-                vram = d.global_mem_size / (1 << 30)
-                click.echo(f"  [{di}] {d.name}  --  {d.max_compute_units} CUs, {vram:.1f} GB")
+        cuda.init()
+        n = cuda.Device.count()
+        for i in range(n):
+            info = get_device_info(i)
+            click.echo(
+                f"  [{i}] {info['name']}  --  {info['sms']} SMs, {info['vram_gb']:.1f} GB"
+            )
         return
 
     pfx_list = _split_csv(prefix)

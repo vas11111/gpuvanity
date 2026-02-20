@@ -1,19 +1,16 @@
 import logging
 import os
 import time
-import warnings
-from ctypes import c_uint64
 from multiprocessing import Array, Queue
 from multiprocessing.sharedctypes import Synchronized
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 import numpy as np
-import pyopencl as cl
-
-warnings.filterwarnings("ignore", category=cl.CompilerWarning)
+import pycuda.driver as cuda
+from pycuda.compiler import SourceModule
 
 from core.workload import WorkloadConfig
-from core.devices import discover_gpus, select_gpus
+from core.devices import discover_gpus
 
 THROUGHPUT_LOG_INTERVAL = 5.0
 _TICK_CHECK_INTERVAL = 8
@@ -32,13 +29,13 @@ def _fmt_count(n: int) -> str:
 
 
 class GPUMiner:
-    """Binds one OpenCL device and searches continuously until stopped."""
+    """Binds one CUDA device and searches continuously until stopped."""
 
     __slots__ = (
-        "ctx", "cmd_queue", "kern", "cfg",
+        "kern", "cfg",
         "rank", "label",
-        "buf_seed", "buf_result", "buf_sweep_len", "buf_rank",
-        "result_host", "global_dim", "local_dim",
+        "d_seed", "d_result", "d_sweep_len", "d_rank",
+        "result_host", "block_dim", "grid_dim",
         "_interval_keys", "_lifetime_keys", "_last_report", "_tick_count",
     )
 
@@ -47,46 +44,24 @@ class GPUMiner:
         program_src: str,
         rank: int,
         cfg: WorkloadConfig,
-        device_selection: Optional[Tuple[int, List[int]]] = None,
+        device_idx: int = 0,
     ):
-        gpus = (
-            discover_gpus()
-            if device_selection is None
-            else select_gpus(*device_selection)
-        )
-        hw = gpus[rank]
-        self.ctx = cl.Context([hw])
         self.cfg = cfg
         self.rank = rank
-        self.label = rank if device_selection is None else device_selection[1][rank]
-
-        try:
-            self.cmd_queue = cl.CommandQueue(
-                self.ctx,
-                properties=cl.command_queue_properties.OUT_OF_ORDER_EXEC_MODE_ENABLE,
-            )
-        except cl.RuntimeError:
-            self.cmd_queue = cl.CommandQueue(self.ctx)
-
-        flags = "-cl-fast-relaxed-math -cl-mad-enable"
+        self.label = device_idx
 
         logging.info(f"GPU {rank}: compiling kernel (first run may take 15-30s)...")
-        binary = cl.Program(self.ctx, program_src).build(options=flags)
-        self.kern = cl.Kernel(binary, "ed25519_scan")
+        mod = SourceModule(
+            program_src,
+            options=["--use_fast_math", "-O3", "--ptxas-options=-O3"],
+            no_extern_c=True,
+        )
+        self.kern = mod.get_function("ed25519_scan")
         logging.info(f"GPU {rank}: kernel ready")
 
-        max_wg = self.kern.get_work_group_info(
-            cl.kernel_work_group_info.WORK_GROUP_SIZE, hw,
-        )
-        preferred = self.kern.get_work_group_info(
-            cl.kernel_work_group_info.PREFERRED_WORK_GROUP_SIZE_MULTIPLE, hw,
-        )
-        self.local_dim = min(preferred * (max_wg // preferred), max_wg)
-        self.global_dim = (
-            (cfg.batch_size + self.local_dim - 1) // self.local_dim
-        ) * self.local_dim
-
-        cfg._stride = self.global_dim
+        self.block_dim = 256
+        self.grid_dim = (cfg.batch_size + self.block_dim - 1) // self.block_dim
+        cfg._stride = self.block_dim * self.grid_dim
 
         self._setup_buffers()
         self._interval_keys = 0
@@ -95,38 +70,38 @@ class GPUMiner:
         self._tick_count = 0
 
     def _setup_buffers(self) -> None:
-        MF = cl.mem_flags
-        self.buf_seed = cl.Buffer(self.ctx, MF.READ_ONLY | MF.ALLOC_HOST_PTR, 32)
-        self.buf_result = cl.Buffer(self.ctx, MF.WRITE_ONLY | MF.ALLOC_HOST_PTR, 33)
-        self.buf_sweep_len = cl.Buffer(
-            self.ctx, MF.READ_ONLY | MF.COPY_HOST_PTR,
-            hostbuf=np.array([self.cfg.sweep_bytes], dtype=np.uint8),
+        self.d_seed = cuda.mem_alloc(32)
+        self.d_result = cuda.mem_alloc(33)
+        self.d_sweep_len = cuda.mem_alloc(1)
+        self.d_rank = cuda.mem_alloc(1)
+
+        cuda.memcpy_htod(
+            self.d_sweep_len,
+            np.array([self.cfg.sweep_bytes], dtype=np.uint8),
         )
-        self.buf_rank = cl.Buffer(
-            self.ctx, MF.READ_ONLY | MF.COPY_HOST_PTR,
-            hostbuf=np.array([0], dtype=np.uint8),
+        cuda.memcpy_htod(
+            self.d_rank,
+            np.array([0], dtype=np.uint8),
         )
         self.result_host = np.zeros(33, dtype=np.uint8)
-        self.kern.set_arg(0, self.buf_seed)
-        self.kern.set_arg(1, self.buf_result)
-        self.kern.set_arg(2, self.buf_sweep_len)
-        self.kern.set_arg(3, self.buf_rank)
 
     def tick(self) -> np.ndarray:
         """Run one batch on the GPU and return the 33-byte result buffer."""
-        cl.enqueue_copy(self.cmd_queue, self.buf_seed, self.cfg.seed, is_blocking=False)
+        cuda.memcpy_htod(self.d_seed, self.cfg.seed)
 
-        cl.enqueue_nd_range_kernel(
-            self.cmd_queue, self.kern,
-            (self.global_dim,), (self.local_dim,),
+        self.kern(
+            self.d_seed, self.d_result, self.d_sweep_len, self.d_rank,
+            block=(self.block_dim, 1, 1),
+            grid=(self.grid_dim, 1),
         )
 
         self.cfg.step()
 
-        cl.enqueue_copy(self.cmd_queue, self.result_host, self.buf_result, is_blocking=True)
+        cuda.memcpy_dtoh(self.result_host, self.d_result)
 
-        self._interval_keys += self.global_dim
-        self._lifetime_keys += self.global_dim
+        keys_this_tick = self.block_dim * self.grid_dim
+        self._interval_keys += keys_this_tick
+        self._lifetime_keys += keys_this_tick
         self._tick_count += 1
 
         if self._tick_count >= _TICK_CHECK_INTERVAL:
@@ -151,10 +126,21 @@ def mine_loop(
     halt: Synchronized,
     hits: Queue,
     counters: Array,
-    device_selection: Optional[Tuple[int, List[int]]] = None,
+    device_selection: Optional[List[int]] = None,
 ) -> None:
     """Long-lived process: mine on one GPU, push found keys to `hits` queue."""
     try:
+        cuda.init()
+
+        if device_selection is not None:
+            dev_idx = device_selection[rank]
+        else:
+            all_gpus = discover_gpus()
+            dev_idx = all_gpus[rank]
+
+        device = cuda.Device(dev_idx)
+        ctx = device.make_context()
+
         try:
             os.sched_setaffinity(0, {rank % (os.cpu_count() or 1)})
         except (AttributeError, OSError):
@@ -164,24 +150,21 @@ def mine_loop(
             program_src=cfg.program_src,
             rank=rank,
             cfg=cfg,
-            device_selection=device_selection,
+            device_idx=dev_idx,
         )
 
         while not halt.value:
             result = miner.tick()
-
             counters[rank] = miner._lifetime_keys
 
             if result[0]:
                 hits.put(bytes(result[1:33]))
 
                 miner.result_host[:] = 0
-                cl.enqueue_copy(
-                    miner.cmd_queue, miner.buf_result,
-                    miner.result_host, is_blocking=True,
-                )
-
+                cuda.memcpy_htod(miner.d_result, miner.result_host)
                 miner.cfg.randomize()
+
+        ctx.pop()
 
     except KeyboardInterrupt:
         pass

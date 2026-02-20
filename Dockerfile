@@ -1,14 +1,13 @@
-FROM ubuntu:24.04
+FROM nvidia/cuda:12.6.3-devel-ubuntu24.04
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ocl-icd-libopencl1 \
+        python3-pip \
+        python3-dev \
         python3-click \
         python3-base58 \
         python3-nacl \
-        python3-numpy \
-        python3-pyopencl && \
-    mkdir -p /etc/OpenCL/vendors && \
-    echo "libnvidia-opencl.so.1" > /etc/OpenCL/vendors/nvidia.icd && \
+        python3-numpy && \
+    pip3 install --break-system-packages pycuda && \
     rm -rf /var/lib/apt/lists/*
 
 COPY core/ /app/core/
