@@ -1,7 +1,4 @@
-
-typedef int int32_t;
-typedef unsigned long long uint64_t;
-typedef long long int64_t;
+#include <stdint.h>
 typedef int32_t fe[10];
 
 // -- BEGIN INJECTED PARAMETERS (overwritten at runtime) --

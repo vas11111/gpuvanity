@@ -140,31 +140,31 @@ def mine_loop(
 
         device = cuda.Device(dev_idx)
         ctx = device.make_context()
-
         try:
-            os.sched_setaffinity(0, {rank % (os.cpu_count() or 1)})
-        except (AttributeError, OSError):
-            pass
+            try:
+                os.sched_setaffinity(0, {rank % (os.cpu_count() or 1)})
+            except (AttributeError, OSError):
+                pass
 
-        miner = GPUMiner(
-            program_src=cfg.program_src,
-            rank=rank,
-            cfg=cfg,
-            device_idx=dev_idx,
-        )
+            miner = GPUMiner(
+                program_src=cfg.program_src,
+                rank=rank,
+                cfg=cfg,
+                device_idx=dev_idx,
+            )
 
-        while not halt.value:
-            result = miner.tick()
-            counters[rank] = miner._lifetime_keys
+            while not halt.value:
+                result = miner.tick()
+                counters[rank] = miner._lifetime_keys
 
-            if result[0]:
-                hits.put(bytes(result[1:33]))
+                if result[0]:
+                    hits.put(bytes(result[1:33]))
 
-                miner.result_host[:] = 0
-                cuda.memcpy_htod(miner.d_result, miner.result_host)
-                miner.cfg.randomize()
-
-        ctx.pop()
+                    miner.result_host[:] = 0
+                    cuda.memcpy_htod(miner.d_result, miner.result_host)
+                    miner.cfg.randomize()
+        finally:
+            ctx.pop()
 
     except KeyboardInterrupt:
         pass
