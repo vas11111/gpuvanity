@@ -5,9 +5,8 @@ GPU-accelerated Solana vanity address generator. Finds Ed25519 keypairs whose Ba
 ## Quick Start
 
 ```bash
-# install
-apt install -y python3-full python3-venv ocl-icd-libopencl1
-apt install -y libnvidia-compute-570   # match your driver version
+# install (requires NVIDIA driver + CUDA toolkit)
+apt install -y python3-full python3-venv cuda-toolkit-12-6
 
 git clone https://github.com/vas11111/gpuvanity.git && cd gpuvanity
 python3 -m venv .venv && source .venv/bin/activate
@@ -32,16 +31,18 @@ Every GPU generates random Ed25519 keypairs, encodes the public key as a Base58 
 
 When you specify both `--prefix` and `--suffix`, the search uses **OR logic**: an address that matches *any* listed prefix or *any* listed suffix is a hit.
 
-## Benchmarks (9x RTX 4090)
+## Benchmarks (9x RTX 5090)
 
 | Metric | Value |
 |---|---|
-| Per-GPU throughput | ~80 MH/s |
-| Aggregate (9 GPUs) | ~720 MH/s |
+| Per-GPU throughput | ~108-110 MH/s |
+| Aggregate (9 GPUs) | ~965-991 MH/s |
+
+![CUDA benchmark results](images/image.png)
 
 ### Expected search times
 
-| Pattern Length | Combinations | 1 GPU (~80 MH/s) | 9 GPUs (~720 MH/s) |
+| Pattern Length | Combinations | 1 GPU (~110 MH/s) | 9 GPUs (~970 MH/s) |
 |:-:|:-:|:-:|:-:|
 | 3 chars | ~195K | instant | instant |
 | 4 chars | ~11.3M | < 1s | < 1s |
@@ -122,7 +123,7 @@ Requires the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud
 
 ## Installation Notes
 
-- **NVIDIA driver**: must include the OpenCL ICD. Install the `libnvidia-compute-XXX` package matching your driver version.
+- **NVIDIA driver + CUDA toolkit**: required for kernel compilation. Install `cuda-toolkit-12-6` (or match your driver version).
 - **First run**: kernel compilation takes 15-30 seconds per GPU. All subsequent iterations are instant.
 - **Batch exponent**: `28` (268M keys/iter) works well on all modern NVIDIA GPUs. Lower to `26` if you run into memory issues on smaller cards.
 - **Longer patterns**: each additional character multiplies search time by ~58x. Patterns of 7+ characters are long-running jobs.
