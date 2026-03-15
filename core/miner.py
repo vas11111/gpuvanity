@@ -34,7 +34,7 @@ class GPUMiner:
     __slots__ = (
         "kern", "cfg",
         "rank", "label",
-        "d_seed", "d_result", "d_sweep_len", "d_rank",
+        "d_seed", "d_result",
         "result_host", "block_dim", "grid_dim",
         "_interval_keys", "_lifetime_keys", "_last_report", "_tick_count",
     )
@@ -72,17 +72,6 @@ class GPUMiner:
     def _setup_buffers(self) -> None:
         self.d_seed = cuda.mem_alloc(32)
         self.d_result = cuda.mem_alloc(33)
-        self.d_sweep_len = cuda.mem_alloc(1)
-        self.d_rank = cuda.mem_alloc(1)
-
-        cuda.memcpy_htod(
-            self.d_sweep_len,
-            np.array([self.cfg.sweep_bytes], dtype=np.uint8),
-        )
-        cuda.memcpy_htod(
-            self.d_rank,
-            np.array([0], dtype=np.uint8),
-        )
         self.result_host = np.zeros(33, dtype=np.uint8)
 
     def tick(self) -> np.ndarray:
@@ -90,7 +79,7 @@ class GPUMiner:
         cuda.memcpy_htod(self.d_seed, self.cfg.seed)
 
         self.kern(
-            self.d_seed, self.d_result, self.d_sweep_len, self.d_rank,
+            self.d_seed, self.d_result,
             block=(self.block_dim, 1, 1),
             grid=(self.grid_dim, 1),
         )

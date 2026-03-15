@@ -3,9 +3,10 @@ typedef int32_t fe[10];
 
 // -- BEGIN INJECTED PARAMETERS (overwritten at runtime) --
 #define N 0
-#define L 0
+#define L 1
 #define NS 0
-#define SL 0
+#define SL 1
+#define SWEEP_LEN 4
 __constant__ bool CASE_SENSITIVE = true;
 // -- END INJECTED PARAMETERS --
 
@@ -3741,9 +3742,7 @@ unsigned char * base58_encode(unsigned char *in, size_t *out_len, unsigned char 
 
 extern "C" __global__ void __launch_bounds__(256)
 ed25519_scan(const unsigned char * __restrict__ seed,
-             unsigned char * __restrict__ out,
-             const unsigned char * __restrict__ sweep_len,
-             const unsigned char * __restrict__ rank) {
+             unsigned char * __restrict__ out) {
   unsigned char public_key[32] __attribute__((aligned(4)));
   unsigned char key_base[32];
 
@@ -3751,9 +3750,10 @@ ed25519_scan(const unsigned char * __restrict__ seed,
   for (size_t i = 0; i < 32; i++) {
     key_base[i] = seed[i];
   }
-  const int global_id = (*rank) * ((unsigned int)(gridDim.x * blockDim.x)) + ((unsigned int)(blockIdx.x * blockDim.x + threadIdx.x));
+  const unsigned int global_id = (unsigned int)(blockIdx.x * blockDim.x + threadIdx.x);
 
-  for (size_t i = 0; i < *sweep_len; i++) {
+  #pragma unroll
+  for (size_t i = 0; i < SWEEP_LEN; i++) {
     key_base[31 - i] += ((global_id >> (i * 8)) & 0xFF);
   }
 
@@ -3780,12 +3780,8 @@ ed25519_scan(const unsigned char * __restrict__ seed,
     #pragma unroll
     for (size_t s = 0; s < NS; s++) {
       unsigned int sfx_mismatch = 0;
-      size_t slen = 0;
-      for (size_t k = 0; k < SL; k++) {
-        if (SUFFIXES[s][k] != 0) slen = k + 1;
-      }
-      for (size_t i = 0; i < slen; i++) {
-        sfx_mismatch |= ADJUST_INPUT_CASE(addr_raw[length - slen + i]) ^ ADJUST_INPUT_CASE(alphabet_indices[SUFFIXES[s][i]]);
+      for (size_t i = 0; i < SUFFIX_LENS[s]; i++) {
+        sfx_mismatch |= ADJUST_INPUT_CASE(addr_raw[length - SUFFIX_LENS[s] + i]) ^ ADJUST_INPUT_CASE(alphabet_indices[SUFFIXES[s][i]]);
       }
       if (!sfx_mismatch) { found = 1; break; }
     }
@@ -3793,14 +3789,10 @@ ed25519_scan(const unsigned char * __restrict__ seed,
 #endif
 
   if (found) {
-    if (out[0] == 0) {
-      out[0] = length;
-      for (size_t j = 0; j < 32; j++) {
-        out[j + 1] = key_base[j];
-      }
-    }
-    if (length < out[0]) {
-      out[0] = length;
+    unsigned int old = atomicCAS((unsigned int *)out, 0u, 1u);
+    if (old == 0u) {
+      out[0] = (unsigned char)length;
+      #pragma unroll
       for (size_t j = 0; j < 32; j++) {
         out[j + 1] = key_base[j];
       }

@@ -22,6 +22,7 @@ def build_program_source(
     prefixes: Tuple[str, ...],
     suffixes: Tuple[str, ...],
     case_sensitive: bool,
+    sweep_bytes: int = 4,
 ) -> str:
     """Read the CUDA template and inject match parameters for all patterns."""
     pfx_encoded = [list(p.encode()) for p in prefixes] if prefixes else []
@@ -36,6 +37,15 @@ def build_program_source(
     longest_sfx = max((len(e) for e in sfx_encoded), default=0)
     for e in sfx_encoded:
         e += [0] * (longest_sfx - len(e))
+
+    # Pre-compute suffix lengths (non-zero byte count per suffix)
+    sfx_lens = []
+    for e in sfx_encoded:
+        slen = 0
+        for k, v in enumerate(e):
+            if v != 0:
+                slen = k + 1
+        sfx_lens.append(slen)
 
     if not _CUDA_SOURCE.exists():
         raise FileNotFoundError(f"Missing CUDA source: {_CUDA_SOURCE}")
@@ -73,6 +83,11 @@ def build_program_source(
         block.append(
             f"__constant__ unsigned char SUFFIXES[{n_sfx}][{longest_sfx}] = {{{cells}}};\n"
         )
+        lens_str = ", ".join(str(l) for l in sfx_lens)
+        block.append(
+            f"__constant__ unsigned int SUFFIX_LENS[{n_sfx}] = {{{lens_str}}};\n"
+        )
+    block.append(f"#define SWEEP_LEN {sweep_bytes}\n")
     block.append(
         f"__constant__ bool CASE_SENSITIVE = {str(case_sensitive).lower()};\n"
     )

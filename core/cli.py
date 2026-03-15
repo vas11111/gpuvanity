@@ -127,7 +127,8 @@ def main(
         parts.append(f"suffix=[{', '.join(sfx_list)}]")
     logging.info(f"Targets: {', '.join(parts)} | {'continuous' if forever else f'{count} each'}")
 
-    src = build_program_source(tuple(pfx_list), tuple(sfx_list), case_sensitive)
+    sweep_bytes = (batch_exp + 7) >> 3
+    src = build_program_source(tuple(pfx_list), tuple(sfx_list), case_sensitive, sweep_bytes)
 
     halt = Value("i", 0)
 

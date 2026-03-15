@@ -38,7 +38,8 @@ def run_bench(gpu_idx: int = 0, iters: int = 10, batch_exp: int = 28):
 
     ctx = device.make_context()
 
-    src = build_program_source(("Bench",), (), True)
+    sweep_bytes = (batch_exp + 7) >> 3
+    src = build_program_source(("Bench",), (), True, sweep_bytes)
     cfg = WorkloadConfig(src, batch_exp)
 
     print("Compiling kernel... ", end="", flush=True)
@@ -56,16 +57,11 @@ def run_bench(gpu_idx: int = 0, iters: int = 10, batch_exp: int = 28):
 
     d_seed = cuda.mem_alloc(32)
     d_result = cuda.mem_alloc(33)
-    d_sweep = cuda.mem_alloc(1)
-    d_rank = cuda.mem_alloc(1)
-
-    cuda.memcpy_htod(d_sweep, np.array([cfg.sweep_bytes], dtype=np.uint8))
-    cuda.memcpy_htod(d_rank, np.array([0], dtype=np.uint8))
     result_host = np.zeros(33, dtype=np.uint8)
 
     # warmup
     cuda.memcpy_htod(d_seed, cfg.seed)
-    kern(d_seed, d_result, d_sweep, d_rank, block=(block_dim, 1, 1), grid=(grid_dim, 1))
+    kern(d_seed, d_result, block=(block_dim, 1, 1), grid=(grid_dim, 1))
     cuda.memcpy_dtoh(result_host, d_result)
     cfg.step()
 
@@ -77,7 +73,7 @@ def run_bench(gpu_idx: int = 0, iters: int = 10, batch_exp: int = 28):
     for i in range(iters):
         cuda.memcpy_htod(d_seed, cfg.seed)
         t0 = time.monotonic()
-        kern(d_seed, d_result, d_sweep, d_rank, block=(block_dim, 1, 1), grid=(grid_dim, 1))
+        kern(d_seed, d_result, block=(block_dim, 1, 1), grid=(grid_dim, 1))
         cuda.memcpy_dtoh(result_host, d_result)
         dt = time.monotonic() - t0
         cfg.step()
