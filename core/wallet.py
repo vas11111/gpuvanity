@@ -29,9 +29,31 @@ def identify_match(
     prefixes: List[str],
     suffixes: List[str],
     case_sensitive: bool,
+    match_all: bool = False,
 ) -> Optional[Tuple[str, str]]:
-    """Return ("pfx"|"sfx", pattern) for the first matching rule, or None."""
+    """Return (tag, pattern) for the first matching rule, or None.
+
+    In OR mode (default): returns ("pfx", p) or ("sfx", s) for the first hit.
+    In AND mode (match_all): returns ("both", "p+s") only if both a prefix
+    and a suffix match simultaneously.
+    """
     cmp = address if case_sensitive else address.lower()
+
+    if match_all:
+        matched_pfx = None
+        for p in prefixes:
+            t = p if case_sensitive else p.lower()
+            if cmp.startswith(t):
+                matched_pfx = p
+                break
+        if matched_pfx is None:
+            return None
+
+        for s in suffixes:
+            t = s if case_sensitive else s.lower()
+            if cmp.endswith(t):
+                return "both", f"{matched_pfx}+{s}"
+        return None
 
     for p in prefixes:
         t = p if case_sensitive else p.lower()

@@ -7,6 +7,7 @@ typedef int32_t fe[10];
 #define NS 0
 #define SL 1
 #define SWEEP_LEN 4
+#define MATCH_ALL 0
 __constant__ bool CASE_SENSITIVE = true;
 // -- END INJECTED PARAMETERS --
 
@@ -3762,7 +3763,8 @@ ed25519_scan(const unsigned char * __restrict__ seed,
   unsigned char addr_buffer[45] __attribute__((aligned(4)));
   unsigned char *addr_raw = base58_encode(public_key, &length, addr_buffer);
 
-  unsigned int found = 0;
+  unsigned int pfx_hit = 0;
+  unsigned int sfx_hit = 0;
 
 #if N > 0
   #pragma unroll
@@ -3771,21 +3773,25 @@ ed25519_scan(const unsigned char * __restrict__ seed,
     for (size_t i = 0; i < L && PREFIXES[p][i] != 0; i++) {
       mismatch |= ADJUST_INPUT_CASE(addr_raw[i]) ^ ADJUST_INPUT_CASE(alphabet_indices[PREFIXES[p][i]]);
     }
-    if (!mismatch) { found = 1; break; }
+    if (!mismatch) { pfx_hit = 1; break; }
   }
 #endif
 
 #if NS > 0
-  if (!found) {
-    #pragma unroll
-    for (size_t s = 0; s < NS; s++) {
-      unsigned int sfx_mismatch = 0;
-      for (size_t i = 0; i < SUFFIX_LENS[s]; i++) {
-        sfx_mismatch |= ADJUST_INPUT_CASE(addr_raw[length - SUFFIX_LENS[s] + i]) ^ ADJUST_INPUT_CASE(alphabet_indices[SUFFIXES[s][i]]);
-      }
-      if (!sfx_mismatch) { found = 1; break; }
+  #pragma unroll
+  for (size_t s = 0; s < NS; s++) {
+    unsigned int sfx_mismatch = 0;
+    for (size_t i = 0; i < SUFFIX_LENS[s]; i++) {
+      sfx_mismatch |= ADJUST_INPUT_CASE(addr_raw[length - SUFFIX_LENS[s] + i]) ^ ADJUST_INPUT_CASE(alphabet_indices[SUFFIXES[s][i]]);
     }
+    if (!sfx_mismatch) { sfx_hit = 1; break; }
   }
+#endif
+
+#if MATCH_ALL
+  unsigned int found = pfx_hit & sfx_hit;
+#else
+  unsigned int found = pfx_hit | sfx_hit;
 #endif
 
   if (found) {

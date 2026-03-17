@@ -18,8 +18,11 @@ python3 main.py --prefix Sol
 # find an address ending with "bonk"
 python3 main.py --suffix bonk
 
-# find addresses matching any of several patterns
+# find addresses matching any of several patterns (OR mode)
 python3 main.py --prefix Dead,Beef --suffix bonk,pump
+
+# require BOTH prefix AND suffix to match
+python3 main.py --prefix Sol --suffix dev --match-all
 
 # run continuously, saving every hit
 python3 main.py --suffix bonk --count 0
@@ -29,7 +32,7 @@ python3 main.py --suffix bonk --count 0
 
 Every GPU generates random Ed25519 keypairs, encodes the public key as a Base58 address, and checks if it matches your prefix/suffix patterns -- all on-device. Only matching keypairs are sent back to the host and saved to disk.
 
-When you specify both `--prefix` and `--suffix`, the search uses **OR logic**: an address that matches *any* listed prefix or *any* listed suffix is a hit.
+By default, when you specify both `--prefix` and `--suffix`, the search uses **OR logic**: an address that matches *any* listed prefix or *any* listed suffix is a hit. Add `--match-all` to switch to **AND logic**, where an address must match both a prefix *and* a suffix simultaneously.
 
 ## Benchmarks (9x RTX 5090)
 
@@ -66,6 +69,7 @@ python3 main.py [OPTIONS]
 | `--count N` | `1` | Keys to find per pattern. `0` = run forever |
 | `--output-dir PATH` | `./keys` | Where to save found keypairs |
 | `--case-sensitive / --no-case-sensitive` | on | Case-sensitive matching |
+| `--match-all` | off | Require BOTH prefix AND suffix to match (default: match ANY) |
 | `--batch-exp N` | `28` | Keys per GPU per iteration = 2^N |
 | `--select-device` | off | Interactive GPU picker |
 | `--devices` | | List detected GPUs and exit |

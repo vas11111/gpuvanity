@@ -73,6 +73,7 @@ def _jobs_done(tally: Dict[str, int], target: int) -> bool:
 @click.option("--select-device/--no-select-device", default=False, help="Interactive GPU picker.")
 @click.option("--batch-exp", default=DEFAULT_BATCH_EXP, type=int, help="Batch size exponent (26-30 recommended).")
 @click.option("--case-sensitive/--no-case-sensitive", default=True, help="Pattern matching mode.")
+@click.option("--match-all", is_flag=True, default=False, help="Require BOTH prefix AND suffix to match (default: match ANY).")
 @click.option("--devices", is_flag=True, help="Print GPUs and exit.")
 def main(
     prefix: str,
@@ -82,6 +83,7 @@ def main(
     select_device: bool,
     batch_exp: int,
     case_sensitive: bool,
+    match_all: bool,
     devices: bool,
 ):
     """Solana vanity address miner -- GPU accelerated via CUDA."""
@@ -103,6 +105,10 @@ def main(
         click.echo(click.get_current_context().get_help())
         sys.exit(1)
 
+    if match_all and (not pfx_list or not sfx_list):
+        click.echo("--match-all requires both --prefix and --suffix.")
+        sys.exit(1)
+
     for p in pfx_list:
         assert_base58("prefix", p)
     for s in sfx_list:
@@ -114,10 +120,15 @@ def main(
     forever = count == 0
 
     tally: Dict[str, int] = {}
-    for p in pfx_list:
-        tally[f"pfx_{p}"] = 0
-    for s in sfx_list:
-        tally[f"sfx_{s}"] = 0
+    if match_all:
+        for p in pfx_list:
+            for s in sfx_list:
+                tally[f"both_{p}+{s}"] = 0
+    else:
+        for p in pfx_list:
+            tally[f"pfx_{p}"] = 0
+        for s in sfx_list:
+            tally[f"sfx_{s}"] = 0
 
     logging.info(f"{n_gpus} GPU(s) | batch 2^{batch_exp} = {1 << batch_exp:,} keys/iter/GPU")
     parts = []
@@ -125,10 +136,11 @@ def main(
         parts.append(f"prefix=[{', '.join(pfx_list)}]")
     if sfx_list:
         parts.append(f"suffix=[{', '.join(sfx_list)}]")
-    logging.info(f"Targets: {', '.join(parts)} | {'continuous' if forever else f'{count} each'}")
+    mode_label = "AND" if match_all else "OR"
+    logging.info(f"Targets: {', '.join(parts)} | mode={mode_label} | {'continuous' if forever else f'{count} each'}")
 
     sweep_bytes = (batch_exp + 7) >> 3
-    src = build_program_source(tuple(pfx_list), tuple(sfx_list), case_sensitive, sweep_bytes)
+    src = build_program_source(tuple(pfx_list), tuple(sfx_list), case_sensitive, sweep_bytes, match_all)
 
     halt = Value("i", 0)
 
@@ -180,7 +192,7 @@ def main(
             continue
 
         address = derive_address(secret)
-        hit = identify_match(address, pfx_list, sfx_list, case_sensitive)
+        hit = identify_match(address, pfx_list, sfx_list, case_sensitive, match_all)
 
         if hit is None:
             continue
@@ -210,7 +222,7 @@ def main(
         try:
             secret = hits.get_nowait()
             address = derive_address(secret)
-            hit = identify_match(address, pfx_list, sfx_list, case_sensitive)
+            hit = identify_match(address, pfx_list, sfx_list, case_sensitive, match_all)
             if hit:
                 tag, pattern = hit
                 key = f"{tag}_{pattern}"

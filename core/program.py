@@ -23,6 +23,7 @@ def build_program_source(
     suffixes: Tuple[str, ...],
     case_sensitive: bool,
     sweep_bytes: int = 4,
+    match_all: bool = False,
 ) -> str:
     """Read the CUDA template and inject match parameters for all patterns."""
     pfx_encoded = [list(p.encode()) for p in prefixes] if prefixes else []
@@ -88,6 +89,7 @@ def build_program_source(
             f"__constant__ unsigned int SUFFIX_LENS[{n_sfx}] = {{{lens_str}}};\n"
         )
     block.append(f"#define SWEEP_LEN {sweep_bytes}\n")
+    block.append(f"#define MATCH_ALL {1 if match_all else 0}\n")
     block.append(
         f"__constant__ bool CASE_SENSITIVE = {str(case_sensitive).lower()};\n"
     )
