@@ -40,6 +40,6 @@ class WorkloadConfig:
         for i in range(31, -1, -1):
             if carry == 0:
                 break
-            carry += self.seed[i]
+            carry += int(self.seed[i])
             self.seed[i] = carry & 0xFF
             carry >>= 8
