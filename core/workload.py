@@ -36,5 +36,10 @@ class WorkloadConfig:
         self.seed = self._new_seed()
 
     def step(self) -> None:
-        n = int.from_bytes(self.seed.tobytes(), "big") + self._stride
-        np.copyto(self.seed, np.frombuffer(n.to_bytes(32, "big"), dtype=np.uint8))
+        carry = self._stride
+        for i in range(31, -1, -1):
+            if carry == 0:
+                break
+            carry += self.seed[i]
+            self.seed[i] = carry & 0xFF
+            carry >>= 8

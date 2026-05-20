@@ -3648,7 +3648,7 @@ void ed25519_create_keypair(unsigned char *public_key,
 }
 
 __device__ __forceinline__
-unsigned char * base58_encode(unsigned char *in, size_t *out_len, unsigned char *out) {
+unsigned char * base58_encode(unsigned char *in, unsigned int *out_len, unsigned char *out) {
   unsigned int binary[8];
 
   #pragma unroll
@@ -3748,18 +3748,30 @@ ed25519_scan(const unsigned char * __restrict__ seed,
   unsigned char key_base[32];
 
   #pragma unroll
-  for (size_t i = 0; i < 32; i++) {
+  for (unsigned int i = 0; i < 32; i++) {
     key_base[i] = seed[i];
   }
   const unsigned int global_id = (unsigned int)(blockIdx.x * blockDim.x + threadIdx.x);
 
-  #pragma unroll
-  for (size_t i = 0; i < SWEEP_LEN; i++) {
-    key_base[31 - i] += ((global_id >> (i * 8)) & 0xFF);
+  {
+    unsigned int id = global_id;
+    unsigned int carry = 0;
+    #pragma unroll
+    for (unsigned int i = 0; i < SWEEP_LEN; i++) {
+      unsigned int sum = (unsigned int)key_base[31 - i] + (id & 0xFFu) + carry;
+      key_base[31 - i] = (unsigned char)(sum & 0xFFu);
+      carry = sum >> 8;
+      id >>= 8;
+    }
+    for (unsigned int i = SWEEP_LEN; carry != 0u && i < 32u; i++) {
+      unsigned int sum = (unsigned int)key_base[31 - i] + carry;
+      key_base[31 - i] = (unsigned char)(sum & 0xFFu);
+      carry = sum >> 8;
+    }
   }
 
   ed25519_create_keypair(public_key, key_base);
-  size_t length;
+  unsigned int length;
   unsigned char addr_buffer[45] __attribute__((aligned(4)));
   unsigned char *addr_raw = base58_encode(public_key, &length, addr_buffer);
 
@@ -3768,9 +3780,9 @@ ed25519_scan(const unsigned char * __restrict__ seed,
 
 #if N > 0
   #pragma unroll
-  for (size_t p = 0; p < N; p++) {
+  for (unsigned int p = 0; p < N; p++) {
     unsigned int mismatch = 0;
-    for (size_t i = 0; i < L && PREFIXES[p][i] != 0; i++) {
+    for (unsigned int i = 0; i < L && PREFIXES[p][i] != 0; i++) {
       mismatch |= ADJUST_INPUT_CASE(addr_raw[i]) ^ ADJUST_INPUT_CASE(alphabet_indices[PREFIXES[p][i]]);
     }
     if (!mismatch) { pfx_hit = 1; break; }
@@ -3779,9 +3791,9 @@ ed25519_scan(const unsigned char * __restrict__ seed,
 
 #if NS > 0
   #pragma unroll
-  for (size_t s = 0; s < NS; s++) {
+  for (unsigned int s = 0; s < NS; s++) {
     unsigned int sfx_mismatch = 0;
-    for (size_t i = 0; i < SUFFIX_LENS[s]; i++) {
+    for (unsigned int i = 0; i < SUFFIX_LENS[s]; i++) {
       sfx_mismatch |= ADJUST_INPUT_CASE(addr_raw[length - SUFFIX_LENS[s] + i]) ^ ADJUST_INPUT_CASE(alphabet_indices[SUFFIXES[s][i]]);
     }
     if (!sfx_mismatch) { sfx_hit = 1; break; }
@@ -3799,7 +3811,7 @@ ed25519_scan(const unsigned char * __restrict__ seed,
     if (old == 0u) {
       out[0] = (unsigned char)length;
       #pragma unroll
-      for (size_t j = 0; j < 32; j++) {
+      for (unsigned int j = 0; j < 32; j++) {
         out[j + 1] = key_base[j];
       }
     }
