@@ -1,5 +1,6 @@
 import json
 import logging
+import multiprocessing
 import os
 import queue
 import signal
@@ -9,6 +10,11 @@ from ctypes import c_uint64
 from multiprocessing import Array, Process, Queue, Value
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+try:
+    multiprocessing.set_start_method("spawn")
+except RuntimeError:
+    pass
 
 import click
 import pycuda.driver as cuda
