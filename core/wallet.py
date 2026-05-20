@@ -66,3 +66,40 @@ def identify_match(
             return "sfx", s
 
     return None
+
+
+def match_targets(
+    address: str,
+    targets: List[dict],
+    case_sensitive: bool,
+) -> Optional[Tuple[str, str]]:
+    """Check address against a list of targets with independent match modes.
+
+    Each target dict has optional 'prefix' and 'suffix' keys.
+    Both present → AND mode, one present → match that part only.
+    Returns (tag, pattern) for the first matching target, or None.
+    """
+    cmp = address if case_sensitive else address.lower()
+
+    for t in targets:
+        prefix = t.get("prefix", "")
+        suffix = t.get("suffix", "")
+
+        if prefix:
+            p = prefix if case_sensitive else prefix.lower()
+            if not cmp.startswith(p):
+                continue
+
+        if suffix:
+            s = suffix if case_sensitive else suffix.lower()
+            if not cmp.endswith(s):
+                continue
+
+        if prefix and suffix:
+            return "both", f"{prefix}+{suffix}"
+        elif prefix:
+            return "pfx", prefix
+        else:
+            return "sfx", suffix
+
+    return None

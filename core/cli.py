@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import queue
@@ -15,7 +16,7 @@ import pycuda.driver as cuda
 from core.devices import discover_gpus, get_device_info, pick_devices
 from core.miner import _fmt_count, mine_loop
 from core.program import assert_base58, build_program_source
-from core.wallet import derive_address, export_keypair, identify_match
+from core.wallet import derive_address, export_keypair, identify_match, match_targets
 from core.workload import DEFAULT_BATCH_EXP, WorkloadConfig
 
 logging.basicConfig(
@@ -65,9 +66,36 @@ def _jobs_done(tally: Dict[str, int], target: int) -> bool:
     return all(v >= target for v in tally.values())
 
 
+def _load_targets(path: str) -> List[dict]:
+    with open(path) as f:
+        targets = json.load(f)
+    if not isinstance(targets, list) or not targets:
+        raise click.ClickException("Config must be a non-empty JSON array of targets.")
+    for i, t in enumerate(targets):
+        pfx = t.get("prefix", "")
+        sfx = t.get("suffix", "")
+        if not pfx and not sfx:
+            raise click.ClickException(f"Target {i}: must have at least 'prefix' or 'suffix'.")
+        if pfx:
+            assert_base58(f"target {i} prefix", pfx)
+        if sfx:
+            assert_base58(f"target {i} suffix", sfx)
+    return targets
+
+
+def _target_key(t: dict) -> str:
+    pfx, sfx = t.get("prefix", ""), t.get("suffix", "")
+    if pfx and sfx:
+        return f"both_{pfx}+{sfx}"
+    if pfx:
+        return f"pfx_{pfx}"
+    return f"sfx_{sfx}"
+
+
 @click.command(context_settings={"show_default": True})
 @click.option("--prefix", default="", help="Comma-separated prefix targets.")
 @click.option("--suffix", default="", help="Comma-separated suffix targets.")
+@click.option("--config", "config_path", default=None, type=click.Path(exists=True), help="JSON config file with targets (overrides --prefix/--suffix/--match-all).")
 @click.option("--count", default=1, type=int, help="Keys per target (0 = run forever).")
 @click.option("--output-dir", default="./keys", type=click.Path(file_okay=False, dir_okay=True), help="Root output directory.")
 @click.option("--select-device/--no-select-device", default=False, help="Interactive GPU picker.")
@@ -78,6 +106,7 @@ def _jobs_done(tally: Dict[str, int], target: int) -> bool:
 def main(
     prefix: str,
     suffix: str,
+    config_path: Optional[str],
     count: int,
     output_dir: str,
     select_device: bool,
@@ -97,22 +126,29 @@ def main(
             )
         return
 
-    pfx_list = _split_csv(prefix)
-    sfx_list = _split_csv(suffix)
+    targets: Optional[List[dict]] = None
+
+    if config_path:
+        targets = _load_targets(config_path)
+        pfx_list = list({t["prefix"] for t in targets if t.get("prefix") and not t.get("suffix")})
+        sfx_list = list({t["suffix"] for t in targets if t.get("suffix")})
+    else:
+        pfx_list = _split_csv(prefix)
+        sfx_list = _split_csv(suffix)
 
     if not pfx_list and not sfx_list:
-        click.echo("Provide at least --prefix or --suffix.")
+        click.echo("Provide at least --prefix or --suffix (or use --config).")
         click.echo(click.get_current_context().get_help())
         sys.exit(1)
 
-    if match_all and (not pfx_list or not sfx_list):
-        click.echo("--match-all requires both --prefix and --suffix.")
-        sys.exit(1)
-
-    for p in pfx_list:
-        assert_base58("prefix", p)
-    for s in sfx_list:
-        assert_base58("suffix", s)
+    if not config_path:
+        if match_all and (not pfx_list or not sfx_list):
+            click.echo("--match-all requires both --prefix and --suffix.")
+            sys.exit(1)
+        for p in pfx_list:
+            assert_base58("prefix", p)
+        for s in sfx_list:
+            assert_base58("suffix", s)
 
     n_gpus, gpu_sel = _detect_gpus(select_device)
     _tune_process()
@@ -120,7 +156,10 @@ def main(
     forever = count == 0
 
     tally: Dict[str, int] = {}
-    if match_all:
+    if targets:
+        for t in targets:
+            tally[_target_key(t)] = 0
+    elif match_all:
         for p in pfx_list:
             for s in sfx_list:
                 tally[f"both_{p}+{s}"] = 0
@@ -131,16 +170,26 @@ def main(
             tally[f"sfx_{s}"] = 0
 
     logging.info(f"{n_gpus} GPU(s) | batch 2^{batch_exp} = {1 << batch_exp:,} keys/iter/GPU")
-    parts = []
-    if pfx_list:
-        parts.append(f"prefix=[{', '.join(pfx_list)}]")
-    if sfx_list:
-        parts.append(f"suffix=[{', '.join(sfx_list)}]")
-    mode_label = "AND" if match_all else "OR"
-    logging.info(f"Targets: {', '.join(parts)} | mode={mode_label} | {'continuous' if forever else f'{count} each'}")
+    if targets:
+        for t in targets:
+            pfx, sfx = t.get("prefix", ""), t.get("suffix", "")
+            mode = "AND" if pfx and sfx else "prefix" if pfx else "suffix"
+            logging.info(f"  Target: {_target_key(t)} ({mode})")
+    else:
+        parts = []
+        if pfx_list:
+            parts.append(f"prefix=[{', '.join(pfx_list)}]")
+        if sfx_list:
+            parts.append(f"suffix=[{', '.join(sfx_list)}]")
+        mode_label = "AND" if match_all else "OR"
+        logging.info(f"Targets: {', '.join(parts)} | mode={mode_label}")
+    logging.info(f"{'Continuous' if forever else f'{count} each'} | case_sensitive={case_sensitive}")
 
     sweep_bytes = (batch_exp + 7) >> 3
-    src = build_program_source(tuple(pfx_list), tuple(sfx_list), case_sensitive, sweep_bytes, match_all)
+    src = build_program_source(
+        tuple(pfx_list), tuple(sfx_list), case_sensitive, sweep_bytes,
+        match_all=False if targets else match_all,
+    )
 
     halt = Value("i", 0)
 
@@ -169,6 +218,26 @@ def main(
     last_status = time.monotonic()
     prev_searched = 0
 
+    def _check_hit(secret: bytes) -> None:
+        address = derive_address(secret)
+        if targets:
+            hit = match_targets(address, targets, case_sensitive)
+        else:
+            hit = identify_match(address, pfx_list, sfx_list, case_sensitive, match_all)
+        if hit is None:
+            return
+        tag, pattern = hit
+        key = f"{tag}_{pattern}"
+        if not forever and tally.get(key, 0) >= count:
+            return
+        folder = _dest(output_dir, tag, pattern)
+        saved = export_keypair(secret, str(folder))
+        tally[key] = tally.get(key, 0) + 1
+        logging.info(f"FOUND {key}: {saved}")
+        if not forever and _jobs_done(tally, count):
+            logging.info("All targets satisfied")
+            halt.value = 1
+
     while not halt.value:
         try:
             secret = hits.get(timeout=_DRAIN_TIMEOUT)
@@ -191,25 +260,7 @@ def main(
                 last_status = now
             continue
 
-        address = derive_address(secret)
-        hit = identify_match(address, pfx_list, sfx_list, case_sensitive, match_all)
-
-        if hit is None:
-            continue
-
-        tag, pattern = hit
-        key = f"{tag}_{pattern}"
-
-        if not forever and tally[key] >= count:
-            continue
-
-        folder = _dest(output_dir, tag, pattern)
-        export_keypair(secret, str(folder))
-        tally[key] += 1
-
-        if not forever and _jobs_done(tally, count):
-            logging.info("All targets satisfied")
-            halt.value = 1
+        _check_hit(secret)
 
     for w in workers:
         w.join(timeout=30)
@@ -221,15 +272,7 @@ def main(
     while not hits.empty():
         try:
             secret = hits.get_nowait()
-            address = derive_address(secret)
-            hit = identify_match(address, pfx_list, sfx_list, case_sensitive, match_all)
-            if hit:
-                tag, pattern = hit
-                key = f"{tag}_{pattern}"
-                if forever or tally[key] < count:
-                    folder = _dest(output_dir, tag, pattern)
-                    export_keypair(secret, str(folder))
-                    tally[key] += 1
+            _check_hit(secret)
         except queue.Empty:
             break
 
