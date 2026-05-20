@@ -124,6 +124,11 @@ def mine_loop(
     device_selection: Optional[List[int]] = None,
 ) -> None:
     """Long-lived process: mine on one GPU, push found keys to `hits` queue."""
+    logging.basicConfig(
+        level="INFO",
+        format="[%(levelname)s %(asctime)s] %(message)s",
+        datefmt="%H:%M:%S",
+    )
     try:
         cuda.init()
 
