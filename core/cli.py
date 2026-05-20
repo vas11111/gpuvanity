@@ -136,8 +136,21 @@ def main(
 
     if config_path:
         targets = _load_targets(config_path)
-        pfx_list = list({t["prefix"] for t in targets if t.get("prefix") and not t.get("suffix")})
-        sfx_list = list({t["suffix"] for t in targets if t.get("suffix")})
+        pfx_set: set = set()
+        sfx_set: set = set()
+        for t in targets:
+            pfx, sfx = t.get("prefix", ""), t.get("suffix", "")
+            if pfx and sfx:
+                if len(pfx) >= len(sfx):
+                    pfx_set.add(pfx)
+                else:
+                    sfx_set.add(sfx)
+            elif pfx:
+                pfx_set.add(pfx)
+            elif sfx:
+                sfx_set.add(sfx)
+        pfx_list = list(pfx_set)
+        sfx_list = list(sfx_set)
     else:
         pfx_list = _split_csv(prefix)
         sfx_list = _split_csv(suffix)
