@@ -62,8 +62,8 @@ def _detect_gpus(manual: bool) -> Tuple[int, Optional[List[int]]]:
     return n, None
 
 
-def _jobs_done(tally: Dict[str, int], target: int) -> bool:
-    return all(v >= target for v in tally.values())
+def _jobs_done(tally: Dict[str, int], limits: Dict[str, int]) -> bool:
+    return all(tally.get(k, 0) >= v for k, v in limits.items())
 
 
 def _load_targets(path: str) -> List[dict]:
@@ -153,28 +153,37 @@ def main(
     n_gpus, gpu_sel = _detect_gpus(select_device)
     _tune_process()
 
-    forever = count == 0
-
     tally: Dict[str, int] = {}
+    limits: Dict[str, int] = {}
+
     if targets:
         for t in targets:
-            tally[_target_key(t)] = 0
+            key = _target_key(t)
+            tally[key] = 0
+            limits[key] = t.get("count", count)
     elif match_all:
         for p in pfx_list:
             for s in sfx_list:
-                tally[f"both_{p}+{s}"] = 0
+                k = f"both_{p}+{s}"
+                tally[k] = 0
+                limits[k] = count
     else:
         for p in pfx_list:
             tally[f"pfx_{p}"] = 0
+            limits[f"pfx_{p}"] = count
         for s in sfx_list:
             tally[f"sfx_{s}"] = 0
+            limits[f"sfx_{s}"] = count
+
+    forever = all(v == 0 for v in limits.values())
 
     logging.info(f"{n_gpus} GPU(s) | batch 2^{batch_exp} = {1 << batch_exp:,} keys/iter/GPU")
     if targets:
         for t in targets:
             pfx, sfx = t.get("prefix", ""), t.get("suffix", "")
             mode = "AND" if pfx and sfx else "prefix" if pfx else "suffix"
-            logging.info(f"  Target: {_target_key(t)} ({mode})")
+            c = t.get("count", count)
+            logging.info(f"  Target: {_target_key(t)} ({mode}) x{c}")
     else:
         parts = []
         if pfx_list:
@@ -183,7 +192,7 @@ def main(
             parts.append(f"suffix=[{', '.join(sfx_list)}]")
         mode_label = "AND" if match_all else "OR"
         logging.info(f"Targets: {', '.join(parts)} | mode={mode_label}")
-    logging.info(f"{'Continuous' if forever else f'{count} each'} | case_sensitive={case_sensitive}")
+    logging.info(f"{'Continuous' if forever else 'Per-target counts'} | case_sensitive={case_sensitive}")
 
     sweep_bytes = (batch_exp + 7) >> 3
     src = build_program_source(
@@ -228,13 +237,14 @@ def main(
             return
         tag, pattern = hit
         key = f"{tag}_{pattern}"
-        if not forever and tally.get(key, 0) >= count:
+        limit = limits.get(key, 0)
+        if not forever and limit > 0 and tally.get(key, 0) >= limit:
             return
         folder = _dest(output_dir, tag, pattern)
         saved = export_keypair(secret, str(folder))
         tally[key] = tally.get(key, 0) + 1
-        logging.info(f"FOUND {key}: {saved}")
-        if not forever and _jobs_done(tally, count):
+        logging.info(f"FOUND {key}: {saved} ({tally[key]}/{limit})")
+        if not forever and _jobs_done(tally, limits):
             logging.info("All targets satisfied")
             halt.value = 1
 
