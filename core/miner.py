@@ -35,7 +35,8 @@ class GPUMiner:
         "kern", "cfg",
         "rank", "label",
         "d_seed", "d_result",
-        "result_host", "block_dim", "grid_dim",
+        "result_host", "seed_pinned", "block_dim", "grid_dim",
+        "stream",
         "_interval_keys", "_lifetime_keys", "_last_report", "_tick_count",
     )
 
@@ -62,6 +63,7 @@ class GPUMiner:
         self.block_dim = 256
         self.grid_dim = (cfg.batch_size + self.block_dim - 1) // self.block_dim
         cfg._stride = self.block_dim * self.grid_dim
+        self.stream = cuda.Stream()
 
         self._setup_buffers()
         self._interval_keys = 0
@@ -72,21 +74,25 @@ class GPUMiner:
     def _setup_buffers(self) -> None:
         self.d_seed = cuda.mem_alloc(32)
         self.d_result = cuda.mem_alloc(33)
-        self.result_host = np.zeros(33, dtype=np.uint8)
+        self.result_host = cuda.pagelocked_zeros(33, dtype=np.uint8)
+        self.seed_pinned = cuda.pagelocked_zeros(32, dtype=np.uint8)
 
     def tick(self) -> np.ndarray:
         """Run one batch on the GPU and return the 33-byte result buffer."""
-        cuda.memcpy_htod(self.d_seed, self.cfg.seed)
+        self.seed_pinned[:] = self.cfg.seed
+        cuda.memcpy_htod_async(self.d_seed, self.seed_pinned, self.stream)
 
         self.kern(
             self.d_seed, self.d_result,
             block=(self.block_dim, 1, 1),
             grid=(self.grid_dim, 1),
+            stream=self.stream,
         )
 
         self.cfg.step()
 
-        cuda.memcpy_dtoh(self.result_host, self.d_result)
+        cuda.memcpy_dtoh_async(self.result_host, self.d_result, self.stream)
+        self.stream.synchronize()
 
         keys_this_tick = self.block_dim * self.grid_dim
         self._interval_keys += keys_this_tick
@@ -150,7 +156,8 @@ def mine_loop(
                     hits.put(bytes(result[1:33]))
 
                     miner.result_host[:] = 0
-                    cuda.memcpy_htod(miner.d_result, miner.result_host)
+                    cuda.memcpy_htod_async(miner.d_result, miner.result_host, miner.stream)
+                    miner.stream.synchronize()
                     miner.cfg.randomize()
         finally:
             ctx.pop()
