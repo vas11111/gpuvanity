@@ -7,6 +7,7 @@ typedef int32_t fe[10];
 #define NS 0
 #define SL 1
 #define SWEEP_LEN 4
+#define INNER_ITERS 4
 #define MATCH_ALL 0
 __constant__ bool CASE_SENSITIVE = true;
 // -- END INJECTED PARAMETERS --
@@ -3741,11 +3742,12 @@ unsigned char * base58_encode(unsigned char *in, unsigned int *out_len, unsigned
   return out + skip;
 }
 
-extern "C" __global__ void __launch_bounds__(256)
+extern "C" __global__ void __launch_bounds__(128)
 ed25519_scan(const unsigned char * __restrict__ seed,
              unsigned char * __restrict__ out) {
   unsigned char public_key[32] __attribute__((aligned(4)));
   unsigned char key_base[32];
+  unsigned char hash[64];
 
   #pragma unroll
   for (unsigned int i = 0; i < 32; i++) {
@@ -3770,50 +3772,64 @@ ed25519_scan(const unsigned char * __restrict__ seed,
     }
   }
 
-  ed25519_create_keypair(public_key, key_base);
-  unsigned int length;
-  unsigned char addr_buffer[45] __attribute__((aligned(4)));
-  unsigned char *addr_raw = base58_encode(public_key, &length, addr_buffer);
+  for (unsigned int _iter = 0; _iter < INNER_ITERS; _iter++) {
+    {
+      ge_p3 A;
+      sha512(key_base, hash);
+      hash[0] &= 248;
+      hash[31] &= 63;
+      hash[31] |= 64;
+      ge_scalarmult_base(&A, hash);
+      ge_p3_tobytes(public_key, &A);
+    }
 
-  unsigned int pfx_hit = 0;
-  unsigned int sfx_hit = 0;
+    unsigned int length;
+    unsigned char addr_buffer[45] __attribute__((aligned(4)));
+    unsigned char *addr_raw = base58_encode(public_key, &length, addr_buffer);
+
+    unsigned int pfx_hit = 0;
+    unsigned int sfx_hit = 0;
 
 #if N > 0
-  #pragma unroll
-  for (unsigned int p = 0; p < N; p++) {
-    unsigned int mismatch = 0;
-    for (unsigned int i = 0; i < L && PREFIXES[p][i] != 0; i++) {
-      mismatch |= ADJUST_INPUT_CASE(addr_raw[i]) ^ ADJUST_INPUT_CASE(alphabet_indices[PREFIXES[p][i]]);
+    for (unsigned int p = 0; p < N; p++) {
+      unsigned int mismatch = 0;
+      for (unsigned int i = 0; i < L && PREFIXES[p][i] != 0; i++) {
+        mismatch |= ADJUST_INPUT_CASE(addr_raw[i]) ^ ADJUST_INPUT_CASE(alphabet_indices[PREFIXES[p][i]]);
+      }
+      if (!mismatch) { pfx_hit = 1; break; }
     }
-    if (!mismatch) { pfx_hit = 1; break; }
-  }
 #endif
 
 #if NS > 0
-  #pragma unroll
-  for (unsigned int s = 0; s < NS; s++) {
-    unsigned int sfx_mismatch = 0;
-    for (unsigned int i = 0; i < SUFFIX_LENS[s]; i++) {
-      sfx_mismatch |= ADJUST_INPUT_CASE(addr_raw[length - SUFFIX_LENS[s] + i]) ^ ADJUST_INPUT_CASE(alphabet_indices[SUFFIXES[s][i]]);
+    for (unsigned int s = 0; s < NS; s++) {
+      unsigned int sfx_mismatch = 0;
+      for (unsigned int i = 0; i < SUFFIX_LENS[s]; i++) {
+        sfx_mismatch |= ADJUST_INPUT_CASE(addr_raw[length - SUFFIX_LENS[s] + i]) ^ ADJUST_INPUT_CASE(alphabet_indices[SUFFIXES[s][i]]);
+      }
+      if (!sfx_mismatch) { sfx_hit = 1; break; }
     }
-    if (!sfx_mismatch) { sfx_hit = 1; break; }
-  }
 #endif
 
 #if MATCH_ALL
-  unsigned int found = pfx_hit & sfx_hit;
+    unsigned int found = pfx_hit & sfx_hit;
 #else
-  unsigned int found = pfx_hit | sfx_hit;
+    unsigned int found = pfx_hit | sfx_hit;
 #endif
 
-  if (found) {
-    unsigned int old = atomicCAS((unsigned int *)out, 0u, 1u);
-    if (old == 0u) {
-      out[0] = (unsigned char)length;
-      #pragma unroll
-      for (unsigned int j = 0; j < 32; j++) {
-        out[j + 1] = key_base[j];
+    if (found) {
+      unsigned int old = atomicCAS((unsigned int *)out, 0u, 1u);
+      if (old == 0u) {
+        out[0] = (unsigned char)length;
+        #pragma unroll
+        for (unsigned int j = 0; j < 32; j++) {
+          out[j + 1] = key_base[j];
+        }
       }
+    }
+
+    #pragma unroll
+    for (unsigned int i = 0; i < 32; i++) {
+      key_base[i] = hash[32 + i];
     }
   }
 }

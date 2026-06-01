@@ -18,12 +18,16 @@ def assert_base58(label: str, text: str) -> None:
         raise SystemExit(1)
 
 
+DEFAULT_INNER_ITERS = 4
+
+
 def build_program_source(
     prefixes: Tuple[str, ...],
     suffixes: Tuple[str, ...],
     case_sensitive: bool,
     sweep_bytes: int = 4,
     match_all: bool = False,
+    inner_iters: int = DEFAULT_INNER_ITERS,
 ) -> str:
     """Read the CUDA template and inject match parameters for all patterns."""
     pfx_encoded = [list(p.encode()) for p in prefixes] if prefixes else []
@@ -89,6 +93,7 @@ def build_program_source(
             f"__constant__ unsigned int SUFFIX_LENS[{n_sfx}] = {{{lens_str}}};\n"
         )
     block.append(f"#define SWEEP_LEN {sweep_bytes}\n")
+    block.append(f"#define INNER_ITERS {inner_iters}\n")
     block.append(f"#define MATCH_ALL {1 if match_all else 0}\n")
     block.append(
         f"__constant__ bool CASE_SENSITIVE = {str(case_sensitive).lower()};\n"

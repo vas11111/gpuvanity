@@ -9,6 +9,7 @@ import numpy as np
 import pycuda.driver as cuda
 from pycuda.compiler import SourceModule
 
+from core.program import DEFAULT_INNER_ITERS
 from core.workload import WorkloadConfig
 from core.devices import discover_gpus
 
@@ -60,7 +61,7 @@ class GPUMiner:
         self.kern = mod.get_function("ed25519_scan")
         logging.info(f"GPU {rank}: kernel ready")
 
-        self.block_dim = 256
+        self.block_dim = 128
         self.grid_dim = (cfg.batch_size + self.block_dim - 1) // self.block_dim
         cfg._stride = self.block_dim * self.grid_dim
         self.stream = cuda.Stream()
@@ -94,7 +95,7 @@ class GPUMiner:
         cuda.memcpy_dtoh_async(self.result_host, self.d_result, self.stream)
         self.stream.synchronize()
 
-        keys_this_tick = self.block_dim * self.grid_dim
+        keys_this_tick = self.block_dim * self.grid_dim * DEFAULT_INNER_ITERS
         self._interval_keys += keys_this_tick
         self._lifetime_keys += keys_this_tick
         self._tick_count += 1
