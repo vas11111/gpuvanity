@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "advisory": "https://emudhra.we-have-a-problem.com/",
+  "cargo": {
+    "rustls-webpki": "0.103.16",
+    "webpki-roots": "1.0.10",
+    "webpki-root-certs": "1.0.10"
+  },
+  "python": {
+    "pip": "26.2.2",
+    "certifi": "2026.10.19",
+    "uv": "0.13.4"
+  },
+  "node": {
+    "22": "22.23.4",
+    "24": "24.22.1",
+    "26": "26.12.1"
+  },
+  "legacy_backports": []
+}

@@ -1,0 +1,27 @@
+name: Dependency security
+on:
+  pull_request:
+  push:
+  schedule:
+    - cron: '41 */6 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: dependency-security-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Security checker regression tests
+        run: python3 -m unittest discover -s .security -p 'test_*.py' -v
+      - name: Enforce declared and resolved minimum versions
+        run: python3 .security/check.py
+      - name: Check freshly published advisories
+        if: ${{ !cancelled() }}
+        run: python3 .security/check.py --advisories
